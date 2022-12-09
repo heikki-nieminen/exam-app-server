@@ -225,6 +225,7 @@ app.route('/exam/question/answer')
 	.delete(isAdmin, async (req, res) => {
 		const values = [req.body.id]
 		try {
+			console.log("Poistetaan vastaus: ", req.body.id)
 			const result = await pool.query('DELETE FROM answer WHERE id=$1', values)
 			res.status(204).send("OK")
 		} catch (err) {
@@ -334,6 +335,9 @@ app.route('/users')
 
 app.route('/users/exam')
 	.all(verifyToken)
+	.get(async (req,res) => {
+	
+	})
 	.post(async (req, res) => {
 		let userId = req.body.userId
 		let examId = req.body.examId
@@ -365,4 +369,19 @@ app.get('/RequestAccess', verifyToken, (req, res) => {
 
 app.get('/isAdmin', [verifyToken, isAdmin], (req, res) => {
 	res.status(200).send(true)
+})
+
+// TODO: userId from verifyToken
+app.post('/useranswer', verifyToken, async (req,res) =>{
+	const values = [req.body.examId, req.body.questionId, req.body.answerId, req.body.userId]
+
+	try{
+		const result = await pool.query('INSERT INTO user_answer (exam_id, question_id, answer_id, user_id) VALUES' +
+			' ($1,$2,$3,$4)', values)
+		console.log("Vastaus tallennettu")
+		res.status(200)
+	}catch(err){
+		console.log(err)
+		res.status(400)
+	}
 })
