@@ -3,9 +3,14 @@ const express = require('express')
 const cors = require('cors')
 const bcrypt = require('bcrypt')
 const {Pool, Client} = require('pg')
+const pg = require('pg')
+const EventEmitter = require('events')
+const util = require('util')
 const jwt = require('jsonwebtoken')
 const https = require('https')
-const {verifyToken, isAdmin, hashPassword} = require ("./utils")
+const {Server} = require('socket.io')
+const {verifyToken, isAdmin, hashPassword} = require("./utils")
+const createPostgresSubscriber = require("pg-listen")
 
 require('dotenv').config()
 
@@ -28,11 +33,48 @@ const options = {
 	cert: fs.readFileSync('./cert/cert.pem')
 }
 
+const server = https.createServer(options, app)
+server.listen(PORT, function () {
+	console.log("Express server listening on port " + PORT)
+})
+const io = new Server(server, {cors: {origin: 'https://localhost:3000'}})
+
+
+// DB notifications
+const subscriber = createPostgresSubscriber({connectionString: `postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_DB}`})
+subscriber.notifications.on("my-channel", (payload) => {
+	console.log("Notification: ", payload)
+})
+
+subscriber.notifications.on("exam-channel", (payload) => {
+	console.log("Tenttimuutos: ", payload)
+	io.emit("exam-change", "ASD")
+})
+
+subscriber.events.on("error", (error) => {
+	console.error("Fatal database connection error:", error)
+	process.exit(1)
+})
+
+process.on("exit", () => {
+	console.log("Exit")
+	subscriber.close()
+})
+
+subscriber.notify("my-channel", {
+})
+
+subscriber.connect()
+subscriber.listenTo("my-channel")
+subscriber.listenTo("exam-channel")
+
+
 app.use(express.json())
 app.use(cors())
 
-const server = https.createServer(options, app).listen(PORT, function () {
-	console.log("Express server listening on port " + PORT)
+io.on("connection", (socket) => {
+	console.log("client connected: ",socket.id)
+	socket.send("Connection established")
 })
 
 // ROOT ROUTE
@@ -70,7 +112,7 @@ app.route('/exams')
 app.route('/exam')
 	.all(verifyToken)
 	.get(async (req, res) => {
-		console.log("Haetaan tentt")
+		console.log("Haetaan tentti ", req.query.id)
 		let exam = {name: "", questions: []}
 		let examId
 		let result
@@ -80,15 +122,24 @@ app.route('/exam')
 				result = await pool.query('SELECT * FROM exam WHERE id=$1', values)
 				examId = result.rows[0].id
 			} else {
+				
+				//Mitä tehdään jos käyttäjä on jo tehnyt/aloittanut tentin??
+				
+				const examAnswered = await pool.query('SELECT * FROM user_answer WHERE exam_id=$1', values)
+				/*if (examAnswered.rowCount > 0) {
+					res.status(200).send("Tentti löytyi")
+					return
+				}*/
 				result = await pool.query('SELECT * FROM user_exam WHERE id=$1', values)
 				examId = result.rows[0].exam_id
 			}
 			if (result.rowCount) {
-				console.log(result.rows[0])
+				console.log("Haetaan kysymykset tenttiin ",examId)
 				exam.name = result.rows[0].name
 				exam.id = examId
 				let questions = await pool.query('SELECT * FROM question WHERE exam_id=$1 ORDER by id ASC', [examId])
-				if (questions.rowCount) {
+				console.log("Saatiin kysymykset ",questions.rows)
+				if (questions.rowCount > 0) {
 					exam.questions = questions.rows
 				}
 				/*if (questions.rowCount) {
@@ -255,7 +306,7 @@ app.route('/login')
 						username: username,
 						role:     pass.rows[0].role
 					}, process.env.SECRET_KEY, {expiresIn: "1h"})
-					res.status(201).json({correct: true, role: pass.rows[0].role, id: pass.rows[0].id, token: token})
+					res.status(201).json({correct: true, role: pass.rows[0].role, id: pass.rows[0].id, token: token, name: pass.rows[0].username})
 				} else {
 					res.status(401).json({correct: false, message: "Wrong username or password"})
 				}
@@ -335,7 +386,7 @@ app.route('/users')
 
 app.route('/users/exam')
 	.all(verifyToken)
-	.get(async (req,res) => {
+	.get(async (req, res) => {
 	
 	})
 	.post(async (req, res) => {
@@ -372,16 +423,33 @@ app.get('/isAdmin', [verifyToken, isAdmin], (req, res) => {
 })
 
 // TODO: userId from verifyToken
-app.post('/useranswer', verifyToken, async (req,res) =>{
+app.post('/useranswer', verifyToken, async (req, res) => {
 	const values = [req.body.examId, req.body.questionId, req.body.answerId, req.body.userId]
-
-	try{
+	
+	try {
 		const result = await pool.query('INSERT INTO user_answer (exam_id, question_id, answer_id, user_id) VALUES' +
 			' ($1,$2,$3,$4)', values)
 		console.log("Vastaus tallennettu")
 		res.status(200)
-	}catch(err){
+	} catch (err) {
 		console.log(err)
 		res.status(400)
 	}
 })
+
+app.route('/userexam')
+	.all(verifyToken)
+	.get(async (req, res) => {
+	
+	})
+	.put(async (req, res) => {
+		try{
+			const result = await pool.query('UPDATE user_exam SET is_completed=true WHERE user_id=$1 exam_id= $2', [req.body.userId, req.body.examId])
+			if(result.rowCount){
+				res.status(200)
+			}
+		}catch(err){
+			console.log(err)
+			res.status(400)
+		}
+	})
